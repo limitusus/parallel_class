@@ -129,10 +129,7 @@ double update_membership(long n, int K, point p[n],
   int i;
   for (i = 0; i < n; i++) {
     int m;
-    dl += set_nearest(K, &p[i], &m, clusters);
-    if (membership[i] != m) {
-      membership[i] = m;
-    }
+    dl += set_nearest(K, &p[i], &membership[i], clusters);
   }
 
   double sum_dl;
@@ -236,16 +233,20 @@ double kmeans1(long n, int K,
     membership[i] = 0;
   }
   int key = 200000 * K + try;
+  double centerpoint[dim];
+  double* centerpoint = malloc(sizeof(double) * K * dim);
 
-  for (i = 0; i < K; i++) {
-    int d;
-    for (d = 0; d < dim; d++) {
-      double x;
-      if (rank == 0) {
-        x = rnd_double(key++);
+  if(rank == 0) {
+    for (i = 0; i < K; i++) {
+      for (int d = 0; d < dim; d++) {
+        centerpoint[i * dim + d] = rnd_double(key++);
       }
-      MPI_Bcast(&x, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-      clusters[i].center.p[d] = x;
+    }
+  }
+  MPI_Bcast(centerpoint, K * dim, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+  for (i = 0; i < K; i++) {
+    for (int d = 0; d < dim; d++) {
+      clusters[i].center.p[d] = centerpoint[i * dim + d];
     }
   }
 
@@ -256,11 +257,13 @@ double kmeans1(long n, int K,
     update_centers(n, K, p, membership, clusters);
     dl_new = update_membership(n, K, p, membership, clusters);
     if (rank == 0) {
-    fprintf(stderr, 
-	    "kmeans1(%lu, %d, try=%d) t=%d %f\n",
-	    n, K, try, t, dl_new);
+      fprintf(stderr, 
+              "kmeans1(%lu, %d, try=%d) t=%d %f\n",
+              n, K, try, t, dl_new);
     }
-    if (dl_new - dl > n * log(0.999)/log(2.0)) break;
+    if (dl_new - dl > n * log(0.999)/log(2.0)) {
+      break;
+    }
     dl = dl_new;
   }
   //canonicalize(n, K, membership);
@@ -277,7 +280,7 @@ void swap01(int ** membership, cluster ** clusters, int a, int b) {
 }
 
 
-double kmeans(long n, int K, 
+double kmeans(long all_n, long n, int K, 
 	      point * p, 
 	      int ** membership, 
 	      cluster ** clusters,
@@ -285,9 +288,6 @@ double kmeans(long n, int K,
   double min_dl = 0;
   int min_try = -1;
   int try;
-
-  long all_n;
-  MPI_Allreduce(&n, &all_n, 1, MPI_LONG, MPI_SUM, MPI_COMM_WORLD);
 
   for (try = 0; try < 5; try++) {
     double dl = kmeans1(n, K, p, membership[1], clusters[1], try, rank);
@@ -318,6 +318,7 @@ int main(int argc, char ** argv) {
   point * p;
 
   long mystart, mynum;
+  long n_maxk_dim[3];
 
   if (rank == 0) {
     char * filename = (argc > 1 ? argv[1] : "points.txt");
@@ -329,10 +330,14 @@ int main(int argc, char ** argv) {
     int rs = fscanf(fp, "%lu %d\n", &n, &dimension);
     assert(rs == 2);
     assert(dimension == 2);
-    max_K = pow(n, 1.0/4.0);  
-    MPI_Bcast(&n, 1, MPI_LONG, 0, MPI_COMM_WORLD);
-    MPI_Bcast(&max_K, 1, MPI_INT, 0, MPI_COMM_WORLD);
-    MPI_Bcast(&dimension, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    max_K = pow(n, 1.0/4.0);
+    n_maxk_dim[0] = n;
+    n_maxk_dim[1] = (long)max_K;
+    n_maxk_dim[2] = (long)dimension;
+    MPI_Request* requests = malloc(sizeof(MPI_Request) * nprocs);
+    MPI_Status* statuses = malloc(sizeof(MPI_Status) * nprocs);
+    
+    MPI_Bcast(n_maxk_dim, 3, MPI_LONG, 0, MPI_COMM_WORLD);
 
     mystart = (n / nprocs) * rank;
     mynum = n / nprocs;
@@ -355,16 +360,22 @@ int main(int argc, char ** argv) {
         rs = fscanf(fp, "%lf %lf\n", &buffer[2*j], &buffer[2*j+1]);
         assert(rs == 2);
       }
-      MPI_Send(buffer, mynum * 2, MPI_DOUBLE, i, 0, MPI_COMM_WORLD);
+      MPI_Isend(buffer, mynum * 2, MPI_DOUBLE, i, 0, MPI_COMM_WORLD, &requests[i]);
     }
+    MPI_Waitall(nprocs - 1, requests, &statuses);
     free(buffer);
+    free(requests);
+    free(statuses);
     fclose(fp);
   }
   else {
-    MPI_Bcast(&n, 1, MPI_LONG, 0, MPI_COMM_WORLD);
-    MPI_Bcast(&max_K, 1, MPI_INT, 0, MPI_COMM_WORLD);
-    MPI_Bcast(&dimension, 1, MPI_INT, 0, MPI_COMM_WORLD);
-    printf("max_K recieved %d (rank = %d)\n", max_K, rank);
+    MPI_Bcast(n_maxk_dim, 3, MPI_LONG, 0, MPI_COMM_WORLD);
+    n = n_maxk_dim[0];
+    max_K = (int)n_maxk_dim[1];
+    dimension = (int)n_maxk_dim[2];
+#ifdef DEBUG
+    printf("max_K received %d (rank = %d)\n", max_K, rank);
+#endif
 
     mystart = (n / nprocs) * rank;
     mynum = n / nprocs;
@@ -391,13 +402,17 @@ int main(int argc, char ** argv) {
   double min_dl = 0.0;
   int min_K = -1;
   for (K = max_K; K >= 2; K = (int)(K * 2.0/3.0)) {
+#ifdef DEBUG
     if (rank == 0) {
       fprintf(stderr, "clustering to %d clusters\n", K);
     }
-    double dl = kmeans(mynum, K, p, membership+1, clusters+1, rank);
+#endif
+    double dl = kmeans(n, mynum, K, p, membership+1, clusters+1, rank);
+#ifdef DEBUG
     if (rank == 0) {
       fprintf(stderr, "  description length = %f\n", dl);
     }
+#endif
     if (min_K == -1 || dl < min_dl) {
       /* keep the best value at membership[0] */
       swap01(membership, clusters, 0, 1);
@@ -405,7 +420,9 @@ int main(int argc, char ** argv) {
       min_K = K;
     }
   }
-
+  /* Calcuration Finishes here */
+  double etime = MPI_Wtime();
+  
   if (rank == 0) {
     fprintf(stderr, 
             "answer: %d clusters, description length = %f\n", 
@@ -420,7 +437,6 @@ int main(int argc, char ** argv) {
     free(clusters[i]);
   }
 
-  double etime = MPI_Wtime();
   if (rank == 0) {
     printf("*** took %f sec ***\n", etime - stime);
   }
