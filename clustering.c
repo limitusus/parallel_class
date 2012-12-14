@@ -128,7 +128,6 @@ double update_membership(long n, int K, point p[n],
   double dl = 0.0;
   int i;
   for (i = 0; i < n; i++) {
-    int m;
     dl += set_nearest(K, &p[i], &membership[i], clusters);
   }
 
@@ -233,7 +232,6 @@ double kmeans1(long n, int K,
     membership[i] = 0;
   }
   int key = 200000 * K + try;
-  double centerpoint[dim];
   double* centerpoint = malloc(sizeof(double) * K * dim);
 
   if(rank == 0) {
