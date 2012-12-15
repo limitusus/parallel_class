@@ -332,8 +332,6 @@ int main(int argc, char ** argv) {
     n_maxk_dim[0] = n;
     n_maxk_dim[1] = (long)max_K;
     n_maxk_dim[2] = (long)dimension;
-    MPI_Request* requests = malloc(sizeof(MPI_Request) * nprocs);
-    MPI_Status* statuses = malloc(sizeof(MPI_Status) * nprocs);
     
     MPI_Bcast(n_maxk_dim, 3, MPI_LONG, 0, MPI_COMM_WORLD);
 
@@ -358,12 +356,10 @@ int main(int argc, char ** argv) {
         rs = fscanf(fp, "%lf %lf\n", &buffer[2*j], &buffer[2*j+1]);
         assert(rs == 2);
       }
-      MPI_Isend(buffer, mynum * 2, MPI_DOUBLE, i, 0, MPI_COMM_WORLD, &requests[i]);
+      MPI_Send(buffer, mynum * 2, MPI_DOUBLE, i, 0, MPI_COMM_WORLD);
     }
     MPI_Waitall(nprocs - 1, requests + 1, statuses + 1);
     free(buffer);
-    free(requests);
-    free(statuses);
     fclose(fp);
   }
   else {
