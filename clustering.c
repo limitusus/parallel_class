@@ -358,7 +358,6 @@ int main(int argc, char ** argv) {
       }
       MPI_Send(buffer, mynum * 2, MPI_DOUBLE, i, 0, MPI_COMM_WORLD);
     }
-    MPI_Waitall(nprocs - 1, requests + 1, statuses + 1);
     free(buffer);
     fclose(fp);
   }
